@@ -227,9 +227,39 @@ alc-app の server proxy `/api/proxy/*` (Cloudflare Workers 上の Nuxt server r
    (Cloudflare Workers 上の Nuxt server route) に送る。
 4. credential 無し / mint 失敗時は従来の `X-Tenant-ID` 経路に fallback (段階移行で非破壊)。
 
-**キオスク運用として計画に組み込むべき点**:
-- device credential (`device_id`/`device_secret`) の **localStorage 永続化が Windows
-  再起動をまたいで保たれること**が無人運用の生命線 → Phase 0/6 で必須確認。
+**credential の永続化先: localStorage ではなくネイティブファイルを真実に (要検討・重要)**
+
+現状の `useDeviceToken.ts` は `device_id`/`device_secret` を **WebView の localStorage**
+に保存する。しかし WebView2 の localStorage は **WebView2 のユーザーデータフォルダに
+紐付く揮発しやすいストア**で、以下で消える:
+- アプリ再インストール / updater によるデータディレクトリ差し替え
+- ユーザーデータパスの変更、プロファイル破損時のリセット
+
+消えると無人キオスクが**再ペアリング要求で停止**する = 運用事故。よって:
+
+- **Android 版は元々ネイティブ側 (`device_settings` SharedPreferences = 実質ファイル)
+  に device_id 等を保存していた** (AlcoholChecker の SharedPreferences)。web の
+  localStorage は別系統のキャッシュに過ぎない。**「credential の真実はネイティブの
+  ファイル、localStorage はミラー」という Android の設計を Windows でも踏襲すべき**。
+- Windows 実装: Tauri 側で credential を **AppData 配下のファイル** (`tauri-plugin-store`
+  or 平ファイル、可能なら DPAPI 等で暗号化) に保存し、これを真実とする。
+
+**案A (リモート表示) 特有の橋渡し問題**: WebView が remote origin (`alc.ippoan.org`) を
+読むため、web ↔ ネイティブファイル間に直接の Tauri IPC が無い (remote origin には
+Tauri API が注入されない)。橋渡し手段を Phase 0/6 で決める:
+1. **起動時シード**: Tauri の `initialization_script` でネイティブファイルの credential を
+   読んで `localStorage` に seed してからページを読む (読み取り方向)。
+2. **書き戻し**: pairing が web 側で起きた時にネイティブファイルへ保存する経路。
+   ローカル WS 制御チャネル (既存ブリッジと同じ 127.0.0.1) or Tauri v2 の remote
+   capability で web → native を通す。
+3. あるいは **credential を丸ごとネイティブ (Tauri コマンド/ローカル HTTP) 側に持たせ、
+   web は毎回そこから取得**する案 (localStorage を使わない)。ただし alc-app 改修が要る。
+
+→ 「localStorage 依存のまま WebView2 データdirを安定させる」か「ネイティブファイルを
+真実にして橋渡しする」かは、**Phase 0 の検証 (localStorage が updater/再起動で残るか) の
+結果を見て決める**。無人キオスクの堅牢性を取るなら後者 (ネイティブファイル) を推す。
+
+**その他のキオスク運用ポイント**:
 - 端末登録は QR / URL / コード入力の3フロー (`DeviceRegistration.vue` /
   `device-claim.vue` / `device-approve.vue`)。Windows では QR スキャンではなく
   **管理者が URL/コードを端末に入力**するのが現実的 (Android の Device Owner QR
@@ -239,8 +269,8 @@ alc-app の server proxy `/api/proxy/*` (Cloudflare Workers 上の Nuxt server r
 - device token は Google ログイン (3.5) と**別系統で人手ログイン不要**。キオスクの
   既定運用はこちらに寄せ、Google OAuth は管理者操作時のみ、という切り分けを想定。
 
-これらは案A 成立性そのものに直結するので **Phase 0 で cookie/localStorage 永続化を確認**
-する (Fable L1)。
+これらは案A 成立性そのものに直結するので **Phase 0 で cookie/localStorage 永続化 +
+ネイティブファイル橋渡しの要否を確認**する (Fable L1)。
 
 ### 3.7 起動形態: タスクバー常駐 + キオスク運用
 
@@ -351,7 +381,7 @@ Android は着信のためにバックグラウンド `RoomWatcher` + FCM full-s
 | **3. FC-1200 ネイティブブリッジ** | `fc1200-wasm` コアロジック流用の native bridge。**Kotlin `Fc1200BridgeServer` を contract にした JSON プロトコル互換テスト**。(present-but-broken なら alc-app のトランスポート強制 issue も) | 実機で FC-1200 測定→Web側到達 + プロトコル互換テスト green |
 | **4. BLE (M5Stack) ブリッジ** | M5Stack を USB シリアルで読む `ws://127.0.0.1:9877` ブリッジ (FC-1200 と同型)。**USB 抜き差し/スリープ復帰の再オープン (Fable L5)** | 実機で M5Stack 経由の体温/血圧→Web側到達、抜き差し後も復帰 |
 | **5. タスクバー常駐 + キオスク UX** | system tray 常駐・×で最小化・ログオン自動起動・single-instance・(オプション)fullscreenキオスク・着信時 window 前面化・ブリッジ起動順序保証 | 実機で「ログオンで裏常駐、トレイ出し入れ、再起動で自動復帰、キオスク表示」 |
-| **6. 認証・device token・登録確認** | auth-worker Google OAuth + **device pairing→device JWT→`/api/proxy` (キオスク中核)** + localStorage/cookie/カメラ権限の永続化 | 実機で再起動後もログイン/device credential/権限が保持され無人運用できる |
+| **6. 認証・device token・登録確認** | auth-worker Google OAuth + **device pairing→device JWT→`/api/proxy` (キオスク中核)** + credential 永続化 (**localStorage が脆いならネイティブファイルを真実に + 案A 橋渡し**) + cookie/カメラ権限の永続化 | 実機で再起動 + updater 適用後も device credential/ログイン/権限が保持され無人運用できる |
 | **7. 配布 (GitHub Release) + 自動アップデート** | `tauri-plugin-updater` 配線 (NSIS 推奨)、署名鍵投入、dev/prod チャネル設計、release workflow | タグ push でインストーラが Release に上がり既存端末が自動更新 |
 | **8. CI/CD** | `windows-latest` build/test/release、`ci-workflows` reusable、**fc1200-wasm private repo pull トークン配線** | PR ごとに build 検証、タグで自動リリース |
 | **9. 実機ロールアウト** | 1台での実運用テスト → 展開 | 運用判断 (このリポジトリの scope 外) |
@@ -365,7 +395,7 @@ Android は着信のためにバックグラウンド `RoomWatcher` + FCM full-s
 | `getDisplayMedia()` | 画面共有が WebView2 で動くか | **fail 率高 (H3)**: Windows 版でネイティブキャプチャ代替を作る or 画面共有を scope 外宣言、を判断 |
 | WebRTC | P2P 通話成立 | 遠隔点呼の管理者通話に影響 |
 | Google OAuth redirect | full-page redirect + `.ippoan.org` cookie + **embedded WebView ブロック回避 (H2)** | 案A の前提崩壊 → auth-worker 改修 or UA override |
-| device token 永続化 | `device_id`/`device_secret` localStorage が再起動で残るか | 無人キオスク運用不可 |
+| device token 永続化 | `device_id`/`device_secret` localStorage が **再起動 + updater 適用 + 再インストール**で残るか | 消えるならネイティブファイルを真実にする (3.6、案A の橋渡しが必要) |
 | hidden window throttling | window 10 分 hide 後もポーリング/WS 再接続が生きるか (M1) | browser args で緩和 (3.10) |
 | loopback `ws://127.0.0.1` | mixed content で許可されるか (L3) | (desktop Chrome で実績あり、確認のみ) |
 
