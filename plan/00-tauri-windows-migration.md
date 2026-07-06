@@ -119,81 +119,183 @@ sidecar として起動する」程度の関与に留め、二重実装を避け
 private repo 依存に変わりはなく、コンパイル済みバイナリの解析難易度は wasm と大差ない
 という理解で進めるが、懸念があれば要相談。
 
-### 3.4 BLE Gateway ブリッジ
+### 3.4 BLE Gateway ブリッジ (M5Stack 経由のシリアル方式で確定)
 
-体温計/血圧計連携が Windows キオスクでも必要か要確認。必要なら FC-1200 と同じ設計
-(sidecar or 統合、`ws://127.0.0.1:9877`) を踏襲。不要なら Phase 4 ごとスキップ可能。
+体温計/血圧計 (BLE) との連携。**Windows ネイティブの BLE スタックは信頼性が
+不安なため使わず、M5Stack (ESP32) を BLE ↔ USB シリアル変換ゲートウェイとして
+間に挟む**方針で確定。Windows 側はネイティブ BLE を一切触らず、M5Stack を
+**USB COM ポート (115200bps) 経由で読むだけ**になる。
 
-### 3.5 デバイス認証・登録
+- これは既存 `useBleGateway.ts` の前提と完全に一致: 同 composable は既に M5Stack 系
+  デバイス (CH340 / CP210x / Espressif native USB / FTDI FT232R、115200bps) を対象に
+  しており、WebSerial 優先 → `ws://127.0.0.1:9877` フォールバックの2経路を持つ。
+- よって Windows 版のブリッジ設計は **FC-1200 (3.3) と全く同じシリアルブリッジ**:
+  `serialport` crate で M5Stack の COM ポートを開き、`ws://127.0.0.1:9877` で
+  Android 版と同じ JSON プロトコルを喋る (`useBleGateway.ts` は無改修で動く)。
+- Windows ネイティブ BLE (WinRT `Windows.Devices.Bluetooth`) 実装は **不要** =
+  リスクの高い部分を M5Stack ファーム側に隔離できるのが利点。
+- M5Stack のファームウェア自体はこのリポジトリの scope 外 (別途管理)。本リポジトリは
+  「M5Stack が吐くシリアル JSON をそのまま WebSocket に橋渡しする」ことに徹する。
+- Phase 0 で WebView2 の WebSerial が使えると分かれば、このブリッジすら不要で
+  WebSerial 直結に倒せる (FC-1200 と同じ判断)。
+
+### 3.5 認証 (auth-worker) — Tauri 移植の設計を左右する最重要事項
+
+alc-app の認証は **`ippoan/auth-worker` が全面的に担う** (rust-alc-api#434、rust は
+dumb backend)。フローは以下 (`useAuth.ts` 実測):
+
+```
+WebView (alc.ippoan.org) ─ /login の Google ボタン
+  → window.location = auth.ippoan.org/oauth/google/redirect?redirect_uri=<callback>
+  → auth-worker が Google と code 交換 → JWT 発行
+  → auth-worker が logi_auth_token cookie (Domain=.ippoan.org) を set
+  → redirect_uri (=<origin>/auth/callback) に戻す
+  → alc-app は cookie を読むだけ (cookie が唯一の真実)
+```
+
+キオスク端末側は別経路もある:
+- **device JWT** (`useDeviceToken.ts`): auth-worker `/device/pair` (role=device-kiosk) で
+  発行した device credential を localStorage 保持 → `/device/token` で 1h JWT を mint →
+  `/api/proxy/*` に Bearer 送信
+- **auth バイパス** (staging): `NUXT_PUBLIC_STAGING_TENANT_ID` で `X-Tenant-ID` 直送
+
+**Tauri 移植への含意 (これが 3.1 の方式選択を決める)**:
+
+- 認証はすべて **cross-subdomain cookie (`.ippoan.org`) + full-page OAuth redirect** に
+  依存している。Android 版はリモート alc-app URL を WebView に読ませているので、これが
+  そのまま成立していた。
+- **案A (リモート表示) なら WebView2 のオリジンが `alc.ippoan.org` になり、cookie も
+  OAuth redirect も Android WebView と完全に同じく透過的に動く** → 認証まわりの追加実装ゼロ。
+- **案B (静的バンドル, `tauri://localhost`) は認証を壊す**:
+  1. `logi_auth_token` は `Domain=.ippoan.org` の cookie。`tauri://localhost` オリジンには
+     送られない (別サイト扱い)。
+  2. `redirect_uri` が `tauri://localhost/auth/callback` になり、auth-worker の
+     `ALLOWED_REDIRECT_ORIGINS` 許可リスト + Google 側 OAuth redirect 制約に引っかかる。
+  3. カスタムスキームの cookie / OAuth ハンドリングを自前で補う必要が生じる。
+  → 案B を採るなら **auth-worker 側の改修 (custom-scheme redirect 許可、cookie 経路の
+    代替) が必須**になり、コストが跳ね上がる。
+
+**結論**: 認証の観点からも **案A (リモート表示) が圧倒的に有利**。Tauri アプリは
+「WebView2 に `https://alc.ippoan.org` を読ませる」ことに徹し、auth-worker の既存
+認証フローに一切手を入れない方針を軸にする。Phase 0 で「WebView2 内で full-page
+Google OAuth redirect + `.ippoan.org` cookie が成立するか」を必ず実機確認する
+(WebView2 の third-party cookie / redirect 挙動が通常ブラウザと異なる可能性があるため)。
+
+### 3.6 デバイス認証・登録
 
 **追加実装は基本的に不要**。`useDeviceToken.ts` / QR・URL 登録ページは purely
 web + localStorage + REST なので、Tauri の WebView 内でそのまま動く見込み。
-確認するのは localStorage の永続化 (Tauri の WebView2 データディレクトリが
-アプリ再起動をまたいで保持されるか) のみ。
+確認するのは localStorage / cookie の永続化 (Tauri の WebView2 データディレクトリが
+アプリ再起動をまたいで保持されるか = ログイン状態が再起動後も維持されるか) のみ。
 
-### 3.6 キオスクロックダウン
+### 3.6 起動形態: タスクバー常駐アプリ (system tray)
 
-Android の Device Owner 相当は Windows では Tauri アプリの責務ではなく、
-**Windows OS 側の「割り当てられたアクセス (kiosk mode)」**または単純に:
+**Windows のタスクバー (通知領域 / system tray) に常駐するアプリとして起動する**
+のが基本形態。フルスクリーンで画面を占有し続ける「ロックダウン型キオスク」ではなく、
+**バックグラウンドに常駐しつつトレイアイコンから window を出し入れできる**モデル。
 
-- `tauri.conf.json` で `decorations: false` (タイトルバー無し) / `fullscreen: true` /
-  ウィンドウクローズ防止 (`prevent_close` + 確認ダイアログ or 完全無効化)
-- 右クリックメニュー・devtools・キーボードショートカット (Alt+F4 等) の無効化
-- Windows 起動時の自動起動 (`tauri-plugin-autostart` or レジストリ Run キー)
-- (オプション) Windows Shell 自体をこのアプリに差し替える「Kiosk browser」構成
-  (OS 側設定、リポジトリの scope 外)
+理由:
+- NFC / FC-1200 / M5Stack (BLE) の各ブリッジ (`ws://127.0.0.1:*`) は **アプリが
+  生きている間ずっと動いている必要がある**。トレイ常駐なら window を閉じても
+  ブリッジは動き続けられる。
+- 端末は「アルコールチェック専用端末」だが、OS を完全占有する Android の Device
+  Owner ほどのロックダウンは Windows では過剰 / 運用が固い。トレイ常駐 + 自動起動で
+  「常に裏で動いていて、必要な時に前面に出る」形が現実的。
 
-を組み合わせる。QR スキャンでの Device Owner プロビジョニング相当は Windows には
-無いので、初期セットアップは手動 (アプリインストール → デバイス登録ページで
-ペアリング) に簡略化される。
+Tauri 実装:
+- `tauri` の **system tray** 機能でトレイアイコン + メニュー (「画面を開く」
+  「再起動」「終了」等) を出す。
+- ウィンドウの「×」は **終了せずトレイに最小化** (`prevent_close` で hide に倒す)。
+  アプリ本体 (ブリッジ) はトレイに残り続ける。
+- **Windows ログオン時に自動起動** (`tauri-plugin-autostart` or レジストリ Run キー)。
+  ログオンしたら裏で常駐開始 → ブリッジ稼働。
+- キオスク相当の「専用端末感」が要る運用では、window 表示時に `fullscreen` /
+  `decorations:false` / devtools・右クリック無効化を **オプションで**被せられるように
+  する (常時ロックダウンは強制しない)。
+- 初期セットアップは手動 (インストール → トレイから window を出す → デバイス登録
+  ページでペアリング)。QR での Device Owner プロビジョニング相当は Windows には無い。
 
-### 3.7 自動アップデート
+### 3.7 配布 (GitHub Release) と自動アップデート
 
-Android 版は PR → dev 端末 OTA push (FCM) / master → GitHub Release、という
-2 チャネル運用 (`alcoholchecker-deploy` skill 参照)。Tauri では:
+**配布は GitHub Release 経由で確定** (`rust-nfc-bridge` と同じ方式)。`v*` タグ push で
+CI が Windows インストーラ (`.msi` / NSIS `.exe`) をビルドして GitHub Release に上げる。
 
-- `tauri-plugin-updater` + GitHub Releases (`latest.json` manifest) を使い、
-  起動時 or 定期的に更新チェック → 自動ダウンロード・再起動
-- dev / prod のチャネル分離が要るなら、Android 版と同様に
-  `dev-tag-release.yml` (`ci-workflows`) で dev チャネル、`tag-release.yml` で
-  prod チャネルを分け、`updater` の endpoint を channel ごとに出し分ける
-- 段階配信 (Release Wave 的な「明示トリガーで配信」) が要るかどうかは
-  運用ポリシー次第。まずは「PR merge で dev 端末に自動配布、prod は手動トリガー」
-  という Android 版の運用を踏襲する案を軸に相談
+- `tauri-plugin-updater` + GitHub Releases の `latest.json` manifest を使い、アプリが
+  起動時 / 定期的に Release をチェック → 自動ダウンロード・再起動。
+- updater には **署名が必須** (Tauri updater の公開鍵/秘密鍵)。秘密鍵は CI secret、
+  公開鍵はアプリに埋め込む。鍵は `secret-inject` skill で GCP/GitHub に投入 (値を
+  会話・log に出さない)。
+- dev / prod チャネル分離が要るなら Android 版同様、`ci-workflows` の
+  `dev-tag-release.yml` (dev, `dev-*` タグ) と `tag-release.yml` (prod, `v*` タグ) を
+  使い、updater endpoint を channel ごとに出し分ける (要否は運用判断)。
+- 署名は tauri updater の鍵であり、Windows の Authenticode コード署名 (SmartScreen
+  警告回避) とは別。Authenticode 証明書の要否は別途判断 (無くても動くが警告が出る)。
 
-### 3.8 遠隔点呼 (WebRTC)
+### 3.8 CI/CD (ci-workflows の reusable を使用)
+
+**CI は `ippoan/ci-workflows` の reusable workflow を使用する** (org 標準に揃える)。
+
+- ただし ci-workflows の既存 reusable は **frontend (Nuxt/Worker) / Go / Node lib** 向けで、
+  **Tauri (Rust + Windows インストーラビルド + GitHub Release) 用の reusable は現状無い**。
+  よって以下のいずれか (要判断):
+  - **A. ci-workflows に Tauri 用 reusable を新設** (`tauri-release.yml` 等) して本 repo が
+    caller になる。他の Tauri アプリが増えた時に共有できる (org 標準化)。
+  - **B. まず本 repo に bespoke workflow を置き**、`rust-nfc-bridge` の `release.yml`
+    (windows-latest + cargo build + MSI 化 + Release アップロード) を下敷きにする。
+    安定後に ci-workflows へ切り出す。
+- caller 側 permissions は ci-workflows の規約に従う (`contents: write` 等、
+  reusable の startup_failure 罠に注意 — `ci-workflows` の CLAUDE.md 参照)。
+- PR ごとに `windows-latest` で build + test、`v*` タグで release ビルド + GitHub
+  Release アップロード。auto-merge も ci-workflows の `auto-merge.yml` を踏襲。
+
+### 3.9 遠隔点呼 (WebRTC)
 
 Android は着信のためにバックグラウンド `RoomWatcher` + FCM full-screen intent が
-必要だった (端末がロック/バックグラウンドになり得るため)。Windows キオスクは
-「常時フォアグラウンドの画面」前提なので、**既存の `TenkoKiosk.vue` の
-`remoteMode` prop によるページ内ポーリングだけで足り、ネイティブ常駐監視は
-恐らく不要** (Phase 0 検証後に確定)。
+必要だった (端末がロック/バックグラウンドになり得るため)。Windows はトレイ常駐 +
+「必要時に window を前面化」する形なので、着信時にトレイからウィンドウを前面化する
+ネイティブ連携が要る可能性はあるが、まずは **既存の `TenkoKiosk.vue` の `remoteMode`
+prop によるページ内ポーリングだけで足りるか** を Phase 0 で確認 (window が hide 中でも
+WebView 内 JS が動き続けるか = ポーリングが止まらないかに依存)。
 
 ## 4. フェーズ計画
 
 | Phase | 内容 | 成果物 / 完了条件 |
 |---|---|---|
-| **0. 実機検証** | 最小 Tauri アプリで WebView2 の WebSerial / getDisplayMedia / getUserMedia / WebRTC 対応を確認 | 対応状況の一覧表 (3.3〜3.8 の設計判断がこれで確定する) |
-| **1. 雛形構築** | `cargo tauri init`、`alc-app/web` (staging URL) を表示するだけの window。CI (`windows-latest` build) 疎通確認 | ビルド済み `.exe` が起動し alc-app のログイン/キオスク画面が出る |
+| **0. 実機検証** | 最小 Tauri アプリで WebView2 の WebSerial / getDisplayMedia / getUserMedia / WebRTC / **full-page Google OAuth redirect + `.ippoan.org` cookie** 対応を確認 | 対応状況の一覧表 (3.1〜3.9 の設計判断がこれで確定する) |
+| **1. 雛形構築** | `cargo tauri init`、`https://alc.ippoan.org` (or staging) を表示するだけの window。CI (`windows-latest` build) 疎通確認 | ビルド済み `.exe`/`.msi` が起動し alc-app のログイン/キオスク画面が出る |
 | **2. NFC 統合** | `rust-nfc-bridge` sidecar 同梱・自動起動、実カードで `nfc_read` イベント疎通確認 | 実機で NFC タップ→Web側イベント受信 |
 | **3. FC-1200 ネイティブブリッジ** | (Phase 0 結果次第) `fc1200-wasm` コアロジック流用の native bridge 実装、実センサーで疎通確認 | 実機で FC-1200 測定→Web側にデータ到達 |
-| **4. BLE Gateway (要否確認後)** | 同上パターン | 要否確定後に判断 |
-| **5. キオスク UX** | フルスクリーン・chrome無し・自動起動・終了防止 | 実機で「起動したらそのままキオスク画面、再起動しても自動復帰」 |
-| **6. デバイス認証確認** | 既存 Web ページでのペアリング・localStorage 永続化確認 | 実機で再起動後もログイン/デバイス登録状態が保持される |
+| **4. BLE (M5Stack) ブリッジ** | M5Stack を USB シリアルで読む `ws://127.0.0.1:9877` ブリッジ実装 (FC-1200 と同型) | 実機で M5Stack 経由の体温/血圧→Web側にデータ到達 |
+| **5. タスクバー常駐 UX** | system tray 常駐・×で最小化・ログオン自動起動・(オプション) fullscreen 化 | 実機で「ログオンしたら裏で常駐、トレイから window 出し入れ、再起動で自動復帰」 |
+| **6. 認証・デバイス登録確認** | auth-worker Google OAuth ログイン + device pairing + localStorage/cookie 永続化確認 | 実機で再起動後もログイン/デバイス登録状態が保持される |
 | **7. 自動アップデート** | `tauri-plugin-updater` 配線、dev/prod チャネル設計、CI release workflow | タグ push で `.msi`/`.exe` が Release に上がり、既存端末が自動更新される |
 | **8. CI/CD** | `windows-latest` runner での build/test/release、`ci-workflows` 標準に揃える | PR ごとに build 検証、タグで自動リリース |
 | **9. 実機ロールアウト** | 1台での実運用テスト → 展開 | 運用判断 (このリポジトリの scope 外) |
 
 ## 5. 主なリスク
 
-- **WebView2 の Web API 対応状況が未確認** (Phase 0 で最優先に潰す。ここがボトルネック)
+- **WebView2 の Web API 対応状況が未確認** (Phase 0 で最優先に潰す。ここがボトルネック)。
+  特に **full-page Google OAuth redirect + `.ippoan.org` cookie** が WebView2 で成立
+  しないと、案A (リモート表示) の前提が崩れ auth-worker 改修が発生する。
 - `fc1200-wasm` のコア分離 (wasm 依存を外す) が想定より大掛かりになる可能性
   → 最悪 native 版のプロトコル実装を素直に再実装 (Kotlin 版が既にあるので参考にはなる
     が、また3重目の実装になり避けたい)
-- BLE Gateway / 画面共有の要否が未確定 (要ヒアリング)
-- 自動アップデートの配信チャネル運用 (dev/prod 分離の要否) が未確定
+- **ci-workflows に Tauri 用 reusable が無い** — 新設 (3.8 案A) か bespoke 先行 (案B) か
+  の判断が要る。
+- updater 署名鍵 / (任意) Authenticode 証明書の運用が未確定。
+- 自動アップデートの配信チャネル運用 (dev/prod 分離の要否) が未確定。
+- トレイ常駐で window hide 中に WebView 内 JS (WebRTC ポーリング等) が止まらないか未確認。
 
-## 6. 次のアクション
+## 6. 確定した方針 (ユーザー確認済み)
 
-1. (要判断) 3.1〜3.4, 3.7 の各論点について方針を確定
+- NFC = **PC/SC** (`rust-nfc-bridge` 流用)
+- BLE = **Windows ネイティブ BLE は使わず M5Stack を USB シリアルで挟む** (信頼性懸念のため)
+- 起動形態 = **タスクバー (system tray) 常駐アプリ**
+- 認証 = **auth-worker** (Google OAuth → `.ippoan.org` cookie) をそのまま利用
+- 配布 = **GitHub Release** 経由
+- CI = **ci-workflows の reusable** を使用 (Tauri 用 reusable の新設要否は要判断)
+
+## 7. 次のアクション
+
+1. (要判断) 3.1 (案A で確定してよいか) / 3.3 (fc1200 コア分離) / 3.8 (reusable 新設 vs bespoke) の方針確定
 2. Phase 0 (実機検証) から着手 — Windows 実機が無い場合は代替の検証手段を相談
