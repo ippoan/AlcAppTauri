@@ -1,0 +1,365 @@
+<!doctype html>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>AlcApp — 起動中</title>
+
+<style>
+  /* ===== リセット・ベース ===== */
+  *, *::before, *::after {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+  }
+
+  /* ===== ダークテーマ全体背景 ===== */
+  html, body {
+    height: 100%;
+    background: #0f1720;
+    color: #e2e8f0;
+    font-family:
+      "Yu Gothic UI", "Meiryo UI", "Meiryo",
+      "Hiragino Kaku Gothic ProN", "Hiragino Sans",
+      system-ui, -apple-system, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  body {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    padding: 24px;
+  }
+
+  /* ===== カード ===== */
+  .card {
+    background: #162230;
+    border: 1px solid #1e3045;
+    border-radius: 12px;
+    box-shadow:
+      0 4px 24px rgba(0, 0, 0, 0.6),
+      0 0 0 1px rgba(20, 120, 90, 0.12);
+    padding: 48px 40px;
+    width: 100%;
+    max-width: 420px;
+    text-align: center;
+    transition: opacity 0.25s ease;
+  }
+
+  /* ===== ロゴ／アプリ名エリア ===== */
+  .brand {
+    margin-bottom: 32px;
+  }
+
+  .brand-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 64px;
+    height: 64px;
+    border-radius: 16px;
+    background: linear-gradient(135deg, #14785a 0%, #0e5c44 100%);
+    margin-bottom: 16px;
+    box-shadow: 0 4px 16px rgba(20, 120, 90, 0.4);
+  }
+
+  /* アイコン内の簡易 SVG (ボトル風シルエット) */
+  .brand-icon svg {
+    width: 36px;
+    height: 36px;
+    fill: #e8f8f3;
+  }
+
+  .brand-name {
+    font-size: 22px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    color: #f0faf6;
+  }
+
+  .brand-sub {
+    font-size: 12px;
+    color: #5a8070;
+    margin-top: 4px;
+    letter-spacing: 0.06em;
+  }
+
+  /* ===== CSS スピナー ===== */
+  .spinner {
+    display: inline-block;
+    width: 40px;
+    height: 40px;
+    border: 3px solid #1e3045;
+    border-top-color: #14785a;
+    border-radius: 50%;
+    animation: spin 0.9s linear infinite;
+    margin: 0 auto 20px;
+  }
+
+  @keyframes spin {
+    to { transform: rotate(360deg); }
+  }
+
+  /* ===== テキスト系 ===== */
+  .status-title {
+    font-size: 16px;
+    font-weight: 600;
+    color: #c8e6dc;
+    margin-bottom: 8px;
+  }
+
+  .status-msg {
+    font-size: 13px;
+    color: #6b8e80;
+    line-height: 1.6;
+  }
+
+  /* 接続先 URL 表示 */
+  .target-url {
+    margin-top: 16px;
+    padding: 10px 14px;
+    background: #0f1720;
+    border: 1px solid #1e3045;
+    border-radius: 8px;
+    font-size: 12px;
+    color: #4a7a68;
+    word-break: break-all;
+    font-family: "Consolas", "Courier New", monospace;
+    letter-spacing: 0.02em;
+  }
+
+  /* ===== 再試行ボタン ===== */
+  .retry-btn {
+    margin-top: 28px;
+    padding: 10px 28px;
+    background: transparent;
+    border: 1.5px solid #14785a;
+    border-radius: 8px;
+    color: #34d49a;
+    font-size: 14px;
+    font-family: inherit;
+    cursor: pointer;
+    transition: background 0.18s ease, color 0.18s ease;
+    letter-spacing: 0.04em;
+  }
+
+  .retry-btn:hover {
+    background: #14785a;
+    color: #e8f8f3;
+  }
+
+  .retry-btn:active {
+    opacity: 0.8;
+  }
+
+  /* ===== 隠しクラス ===== */
+  .hidden {
+    display: none !important;
+  }
+
+  /* ===== エラーバッジ（設定取得失敗の補助表示） ===== */
+  .badge {
+    display: inline-block;
+    margin-top: 10px;
+    padding: 3px 10px;
+    border-radius: 99px;
+    font-size: 11px;
+    background: #1a2c22;
+    color: #3d7a5e;
+    letter-spacing: 0.04em;
+  }
+</style>
+
+<!-- ===== カード本体 ===== -->
+<div class="card" id="card">
+
+  <!-- ブランド -->
+  <div class="brand">
+    <div class="brand-icon" aria-hidden="true">
+      <!-- アルコール検知器をイメージした簡易アイコン -->
+      <svg viewBox="0 0 36 36" xmlns="http://www.w3.org/2000/svg">
+        <rect x="13" y="2" width="10" height="5" rx="2"/>
+        <rect x="11" y="7" width="14" height="20" rx="3"/>
+        <rect x="14" y="27" width="8" height="6" rx="2"/>
+        <circle cx="18" cy="17" r="4" fill="#0e5c44"/>
+        <circle cx="18" cy="17" r="2" fill="#e8f8f3" opacity="0.6"/>
+      </svg>
+    </div>
+    <div class="brand-name">AlcApp</div>
+    <div class="brand-sub">アルコールチェックシステム</div>
+  </div>
+
+  <!-- 起動中ビュー -->
+  <div id="view-loading">
+    <div class="spinner" aria-label="読み込み中"></div>
+    <div class="status-title">起動中…</div>
+    <div class="status-msg">AlcApp を読み込んでいます</div>
+  </div>
+
+  <!-- オフライン／接続待機ビュー -->
+  <div id="view-offline" class="hidden">
+    <div class="spinner" aria-label="接続待機中"></div>
+    <div class="status-title">接続待機中…</div>
+    <div class="status-msg" id="offline-msg">
+      サーバーに接続できません。<br>ネットワークを確認しています。
+    </div>
+    <div class="target-url" id="target-url-display"></div>
+    <button class="retry-btn" id="retry-btn" type="button">再試行</button>
+    <div class="badge" id="fallback-badge" style="display:none">
+      フォールバック設定で動作中
+    </div>
+  </div>
+
+</div><!-- /.card -->
+
+<script>
+"use strict";
+
+/* ===== 設定のデフォルト値 ===== */
+const DEFAULT_CONFIG = {
+  url: "https://alc.ippoan.org",
+  retryIntervalMs: 5000,
+};
+
+/* ===== 前回のリトライタイマーを管理（二重起動を防ぐ） ===== */
+let retryTimer = null;
+
+/* ===== フォールバック設定フラグ（バッジ表示用） ===== */
+let usingFallback = false;
+
+/* ===== 実際に使う設定オブジェクト ===== */
+let cfg = { ...DEFAULT_CONFIG };
+
+/**
+ * retryIntervalMs を安全な正の整数に変換する。
+ * 数値でない・0以下・NaN の場合はデフォルト値を返す。
+ */
+function coerceRetryInterval(val) {
+  const n = typeof val === "number" ? val : Number(val);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : DEFAULT_CONFIG.retryIntervalMs;
+}
+
+/**
+ * Tauri バックエンドから設定を取得する。
+ * Tauri 環境でない場合、または invoke が失敗した場合はデフォルト設定を使う。
+ */
+async function loadConfig() {
+  try {
+    /* Tauri v2 の invoke API 経由で設定を取得 */
+    if (window.__TAURI__ && window.__TAURI__.core && typeof window.__TAURI__.core.invoke === "function") {
+      const raw = await window.__TAURI__.core.invoke("get_app_config");
+      cfg = {
+        url: (raw && typeof raw.url === "string" && raw.url.trim()) || DEFAULT_CONFIG.url,
+        retryIntervalMs: coerceRetryInterval(raw && raw.retryIntervalMs),
+      };
+      return; /* 正常取得完了 */
+    }
+  } catch (e) {
+    /* invoke 失敗 — コンソールに記録してフォールバックへ */
+    console.warn("[AlcApp] get_app_config の呼び出しに失敗しました:", e);
+  }
+
+  /* フォールバック設定を使用 */
+  cfg = { ...DEFAULT_CONFIG };
+  usingFallback = true;
+}
+
+/**
+ * URL が到達可能かどうかを Image ping で確認する（CORS を回避）。
+ * favicon.ico にランダムなタイムスタンプを付けてキャッシュを無効化する。
+ * タイムアウト: 4000ms。
+ */
+function reachable(url) {
+  return new Promise((resolve) => {
+    let settled = false;
+    let timeoutId = null;
+
+    function finish(result) {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeoutId);
+      /* img への参照を解放してブラウザのリクエストを停止 */
+      img.onload = null;
+      img.onerror = null;
+      img.src = "";
+      resolve(result);
+    }
+
+    /* 4秒でタイムアウト → 到達不可とみなす */
+    timeoutId = setTimeout(() => finish(false), 4000);
+
+    const img = new Image();
+    img.onload  = () => finish(true);
+    img.onerror = () => finish(false);
+    /* favicon.ico にタイムスタンプを付加してキャッシュを回避 */
+    img.src = url.replace(/\/$/, "") + "/favicon.ico?ts=" + Date.now();
+  });
+}
+
+/* ===== DOM 要素のキャッシュ ===== */
+const viewLoading       = document.getElementById("view-loading");
+const viewOffline       = document.getElementById("view-offline");
+const targetUrlDisplay  = document.getElementById("target-url-display");
+const fallbackBadge     = document.getElementById("fallback-badge");
+const retryBtn          = document.getElementById("retry-btn");
+
+/** 起動中ビューに切り替える */
+function showLoading() {
+  viewLoading.classList.remove("hidden");
+  viewOffline.classList.add("hidden");
+}
+
+/** オフライン／接続待機ビューに切り替える */
+function showOffline() {
+  viewLoading.classList.add("hidden");
+  viewOffline.classList.remove("hidden");
+  targetUrlDisplay.textContent = cfg.url;
+  fallbackBadge.style.display = usingFallback ? "inline-block" : "none";
+}
+
+/**
+ * メインの起動フロー。
+ * 1. 起動中カードを表示
+ * 2. URL に到達できれば navigate
+ * 3. 到達できなければオフラインカードを表示し、リトライをスケジュール
+ */
+async function tryLoad() {
+  /* 前回のリトライタイマーをキャンセル（二重起動を防ぐ） */
+  if (retryTimer !== null) {
+    clearTimeout(retryTimer);
+    retryTimer = null;
+  }
+
+  showLoading();
+
+  const ok = await reachable(cfg.url);
+
+  if (ok) {
+    /* サーバーに到達できた → WebView を遷移させる */
+    window.location.replace(cfg.url);
+    /* replace() 後もスクリプトが一瞬残る可能性があるため早期リターン */
+    return;
+  }
+
+  /* 到達できなかった → 接続待機カードを表示し、次のリトライを予約 */
+  showOffline();
+
+  retryTimer = setTimeout(tryLoad, cfg.retryIntervalMs);
+}
+
+/* ===== 「再試行」ボタンのクリックハンドラ ===== */
+retryBtn.addEventListener("click", () => {
+  tryLoad();
+});
+
+/* ===== ネットワーク復帰イベント → 即座に再試行 ===== */
+window.addEventListener("online", () => {
+  tryLoad();
+});
+
+/* ===== DOMContentLoaded — 設定取得後に起動フローを開始 ===== */
+document.addEventListener("DOMContentLoaded", async () => {
+  await loadConfig();
+  tryLoad();
+});
+</script>
