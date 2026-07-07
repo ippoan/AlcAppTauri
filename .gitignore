@@ -1,5 +1,8 @@
 # Rust / Tauri
 src-tauri/target/
+target/
+# Cargo.lock は CI で毎回 cargo generate-lockfile で再生成する運用
+Cargo.lock
 # Node
 node_modules/
 # logs / OS

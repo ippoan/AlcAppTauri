@@ -1,10 +1,8 @@
-mod config;
-
-use config::AppConfig;
+use alc_config::AppConfig;
 
 #[tauri::command]
 fn get_app_config() -> AppConfig {
-    config::load()
+    alc_config::load()
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

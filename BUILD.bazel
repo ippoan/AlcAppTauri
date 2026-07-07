@@ -1,9 +1,3 @@
-# Bazel probe (Refs #1): workspace root。tauri.conf.json の frontendDist は
-# "../dist" (= src-tauri の親 = ここ repo root の dist/) を指すため、dist を
-# root package の filegroup として公開し、Probe C の compile_data から
-# //:dist_files で参照して execroot 内で ../dist を解決できるようにする。
-filegroup(
-    name = "dist_files",
-    srcs = glob(["dist/**"]),
-    visibility = ["//visibility:public"],
-)
+# repo root package。Cargo workspace 化に伴い、実際の Bazel target は
+# 各 crate 配下 (crates/alc-config/BUILD.bazel 等) に置く。root では特別な
+# target を提供しない。
