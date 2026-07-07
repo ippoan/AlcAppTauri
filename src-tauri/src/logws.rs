@@ -12,7 +12,9 @@
 //!   ログビューア) が担当し、この crate は「ハブ」までしか持たない (薄く保つ)。
 //! - bind 失敗は warn ログのみで握り潰す (無人キオスクを落とさない fail-open)。
 
+use std::collections::VecDeque;
 use std::io::{self, Write};
+use std::sync::{Arc, Mutex};
 
 use futures_util::{SinkExt, StreamExt};
 use tokio::net::TcpListener;
@@ -22,11 +24,15 @@ use tracing_subscriber::fmt::writer::MakeWriterExt;
 
 /// ブロードキャストのバッファ長。閲覧側が遅くても直近ログは追える程度。
 const CHANNEL_CAPACITY: usize = 1024;
+/// tray からクリップボードにコピーする際の直近ログ保持行数。
+const SNAPSHOT_CAPACITY: usize = 2000;
 
-/// ログ行を全 WS 購読者へ配る中枢。`clone` は同一チャネルを共有する。
+/// ログ行を全 WS 購読者へ配る中枢 + 直近ログのリングバッファ (tray からの
+/// クリップボードコピー用)。`clone` で同じ inner を共有する。
 #[derive(Clone)]
 pub struct LogHub {
     tx: broadcast::Sender<String>,
+    ring: Arc<Mutex<VecDeque<String>>>,
 }
 
 impl Default for LogHub {
@@ -38,26 +44,45 @@ impl Default for LogHub {
 impl LogHub {
     pub fn new() -> Self {
         let (tx, _rx) = broadcast::channel(CHANNEL_CAPACITY);
-        Self { tx }
+        let ring = Arc::new(Mutex::new(VecDeque::with_capacity(SNAPSHOT_CAPACITY)));
+        Self { tx, ring }
     }
 
     fn sender(&self) -> broadcast::Sender<String> {
         self.tx.clone()
     }
+
+    fn push(&self, line: String) {
+        // broadcast (WS 購読者) と ring (tray snapshot) の両方に投げる。
+        let _ = self.tx.send(line.clone());
+        if let Ok(mut r) = self.ring.lock() {
+            if r.len() >= SNAPSHOT_CAPACITY {
+                r.pop_front();
+            }
+            r.push_back(line);
+        }
+    }
+
+    /// tray メニュー "ログをコピー" 用に直近 N 行を 1 つの文字列で返す。
+    pub fn snapshot(&self) -> String {
+        match self.ring.lock() {
+            Ok(r) => r.iter().cloned().collect::<Vec<_>>().join(""),
+            Err(_) => String::new(),
+        }
+    }
 }
 
 /// `tracing` fmt layer の出力先。整形済みの 1 イベント分バイト列を受け取り、
-/// UTF-8 として broadcast へ送る。購読者ゼロでも `send` はエラーにならない
-/// 実装 (`broadcast::Sender::send` は receiver 不在時 `Err` を返すが握り潰す)。
-struct BroadcastWriter {
-    tx: broadcast::Sender<String>,
+/// UTF-8 として LogHub (broadcast + ring) へ送る。
+struct HubWriter {
+    hub: LogHub,
 }
 
-impl Write for BroadcastWriter {
+impl Write for HubWriter {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         if let Ok(s) = std::str::from_utf8(buf) {
             // 末尾改行はビューア側の行区切りに任せるため trim せずそのまま送る。
-            let _ = self.tx.send(s.to_string());
+            self.hub.push(s.to_string());
         }
         Ok(buf.len())
     }
@@ -68,27 +93,27 @@ impl Write for BroadcastWriter {
 }
 
 #[derive(Clone)]
-struct BroadcastMakeWriter {
-    tx: broadcast::Sender<String>,
+struct HubMakeWriter {
+    hub: LogHub,
 }
 
-impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for BroadcastMakeWriter {
-    type Writer = BroadcastWriter;
+impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for HubMakeWriter {
+    type Writer = HubWriter;
 
     fn make_writer(&'a self) -> Self::Writer {
-        BroadcastWriter {
-            tx: self.tx.clone(),
+        HubWriter {
+            hub: self.hub.clone(),
         }
     }
 }
 
-/// `tracing` subscriber を初期化する。stdout と WS ハブの両方へ出力。
+/// `tracing` subscriber を初期化する。stdout と WS ハブ + ring buffer の両方へ出力。
 /// フィルタは `ALC_LOG` env (未設定なら `info`)。多重初期化は `try_init` で無害化。
 pub fn init_tracing(hub: &LogHub) {
     let filter = tracing_subscriber::EnvFilter::try_from_env("ALC_LOG")
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
-    let bmw = BroadcastMakeWriter { tx: hub.sender() };
-    let writer = std::io::stdout.and(bmw);
+    let hmw = HubMakeWriter { hub: hub.clone() };
+    let writer = std::io::stdout.and(hmw);
     let _ = tracing_subscriber::fmt()
         .with_env_filter(filter)
         .with_ansi(false)
