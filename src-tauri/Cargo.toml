@@ -27,3 +27,9 @@ tokio-tungstenite = "0.24"
 futures-util = "0.3"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
+# 起動時に GitHub Release を polling して updater が新版を install する。
+# 署名鍵は user が secret-inject で TAURI_SIGNING_PRIVATE_KEY / _PASSWORD に投入。
+tauri-plugin-updater = "2"
+# ローカルログを tray メニューからクリップボードに出すため。tauri-plugin より
+# 依存が薄い (Windows は SetClipboardData 直呼び) ので arboard を使う。
+arboard = "3"
