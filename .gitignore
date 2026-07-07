@@ -1,0 +1,8 @@
+# Rust / Tauri
+src-tauri/target/
+# Node
+node_modules/
+# logs / OS
+*.log
+.DS_Store
+Thumbs.db
