@@ -1,0 +1,12 @@
+# Bazel package marker only. src-tauri は Cargo (tauri build) が扱う領域で
+# Bazel target は持たないが、MODULE.bazel の crate.from_cargo が
+# //src-tauri:Cargo.toml を watch できるよう空の BUILD.bazel を置く。
+#
+# 過去の Tauri × Bazel 実測 (Probe A/B/C/D) の知見は git log と
+# .github/workflows/bazel-probe.yml のヘッダー comment 参照:
+# - Probe A: 純粋ロジックは Bazel で回る (現在 //crates/alc-config へ移設)
+# - Probe B/C/D: tauri lib 本体は tauri.conf.json + build.rs (tauri-build)
+#   + cargo:dev instruction の 3 段階の配線を要する。build.rs 実行 +
+#   tauri.conf.json 読み込みまでは通ったが、DEP_TAURI_DEV env var 欠落で
+#   tauri-build v2.6.3 が panic。tauri 側は非 cargo build system 未サポート
+#   (Tauri issue #12367)。
