@@ -1,0 +1,7 @@
+# Clippy via rules_rust aspect (Refs #1)
+# `bazel build --config=clippy //crates/alc-config/...` で全 rust target に
+# clippy を並列適用する。aspect 経由なので rust_library / rust_test に BUILD
+# 変更を加えず横断的に clippy が回る。disk-cache に相乗りするので 2 回目以降は
+# 変更 target のみ再チェック。
+build:clippy --aspects=@rules_rust//rust:defs.bzl%rust_clippy_aspect
+build:clippy --output_groups=+clippy_checks

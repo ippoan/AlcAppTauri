@@ -61,14 +61,20 @@ jobs:
             --test_summary=short \
             --verbose_failures
 
+      # clippy を rules_rust の aspect 経由で全 rust target に並列適用。
+      # test と disk-cache を共有するので 2 回目以降は差分のみチェック。
+      - name: "bazel build --config=clippy (clippy 並列適用)"
+        id: bazel_clippy
+        run: |
+          bazel build --config=clippy //crates/alc-config/... \
+            --verbose_failures
+
       - name: 結果サマリ
         if: always()
         run: |
           {
-            echo "## Bazel 並列 test 結果 (crates/alc-config)"
+            echo "## Bazel 並列 test + clippy 結果 (crates/alc-config)"
             echo ""
-            echo "3 つの独立 rust_test target (unit / url_scenarios / retry_scenarios) を"
-            echo "\`bazel test //crates/alc-config/...\` で並列実行。"
-            echo ""
-            echo "- outcome: ${{ steps.bazel_test.outcome }}"
+            echo "- bazel test (3 rust_test target 並列): ${{ steps.bazel_test.outcome }}"
+            echo "- bazel build --config=clippy (rust_clippy_aspect): ${{ steps.bazel_clippy.outcome }}"
           } >> "$GITHUB_STEP_SUMMARY"
