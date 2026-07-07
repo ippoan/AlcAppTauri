@@ -33,6 +33,16 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
+      # Bazel の disk-cache / external repo cache / repository cache を GH Actions
+      # cache に載せる (rust-alc-api の cache-warm と同構成)。同一 PR 内の
+      # 追加 push は refs/pull/N/merge scope の cache を読めるため、初回は 1470
+      # target のフルビルドでも 2 回目以降は (cached) で数秒〜数十秒に短縮される。
+      - uses: ippoan/setup-bazel@main
+        with:
+          disk-cache: "alcapptauri-bazel-probe"
+          external-cache: true
+          repository-cache: true
+
       - name: Install Tauri system deps (Linux WebView / GTK)
         run: |
           sudo apt-get update
