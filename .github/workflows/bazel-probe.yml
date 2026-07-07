@@ -53,10 +53,10 @@ jobs:
       # --jobs=auto がデフォルト)。crates/alc-config には 3 つの独立 rust_test
       # target (unit + 2 integration) があるので、この 1 コマンドで並列実行される。
       # --test_summary=short で並列実行の様子が見える (PASSED (0.Xs) を各 target 分)。
-      - name: "bazel test //crates/alc-config:... (並列実行)"
+      - name: "bazel test //crates/alc-config/... (並列実行)"
         id: bazel_test
         run: |
-          bazel test //crates/alc-config:... \
+          bazel test //crates/alc-config/... \
             --test_output=errors \
             --test_summary=short \
             --verbose_failures
@@ -68,7 +68,7 @@ jobs:
             echo "## Bazel 並列 test 結果 (crates/alc-config)"
             echo ""
             echo "3 つの独立 rust_test target (unit / url_scenarios / retry_scenarios) を"
-            echo "\`bazel test //crates/alc-config:...\` で並列実行。"
+            echo "\`bazel test //crates/alc-config/...\` で並列実行。"
             echo ""
             echo "- outcome: ${{ steps.bazel_test.outcome }}"
           } >> "$GITHUB_STEP_SUMMARY"
