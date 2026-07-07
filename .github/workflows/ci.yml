@@ -136,9 +136,15 @@ jobs:
   # tag 採番 → Release upload まで完結する (Windows build 1 回)。
   release-dev:
     needs: [build, bazel-parallel-test]
+    # public repo なので fork PR は排除。head.repo.full_name == github.repository で
+    # same-repo (org member) の PR のみに release-dev を絞る (fork PR で
+    # 悪意ある build.rs → NSIS payload → prerelease auto-publish の Pwn Request
+    # 経路を封じる)。fork PR は build job (permissions: contents: read) のみ走る。
     if: >-
       (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
-      (github.event_name == 'pull_request' && github.event.pull_request.draft != true)
+      (github.event_name == 'pull_request' &&
+        github.event.pull_request.draft != true &&
+        github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-latest
     permissions:
       contents: write
