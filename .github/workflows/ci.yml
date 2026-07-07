@@ -129,20 +129,26 @@ jobs:
     uses: ippoan/ci-workflows/.github/workflows/auto-merge.yml@main
     secrets: inherit
 
-  # main push 完了後、そのまま dev-N tag を採番して prerelease Release を作る。
-  # 旧構成 (dev-release.yml → dev-tag-release.yml → dev-* tag push → CI on tag →
-  # release) では Windows build が 2 回走ってしまう無駄があった。この構成では
-  # 同一 run 内で build → tag 採番 → Release upload まで完結する (build 1 回)。
+  # PR push (非 draft) と main push の両方で dev-N tag を採番し prerelease Release
+  # を作る (AlcoholChecker Android release.yml と同型)。実機 (Phase 0 検証) は
+  # merge 前の PR 段階で試したい ため、PR で dev build が生成されないと Phase 0 が
+  # 回らない。 draft PR は skip (dev-N 番号の浪費を防ぐ)。同一 run 内で build →
+  # tag 採番 → Release upload まで完結する (Windows build 1 回)。
   release-dev:
     needs: [build, bazel-parallel-test]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: >-
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'pull_request' && github.event.pull_request.draft != true)
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
+      # PR 時は merge ref (detached) ではなく実在する PR head の commit を checkout
+      # する (tag は branch に到達可能な commit に付けたい)。
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       # dev-N tag を race-safe に採番。既存 dev-* の最大 N を取り +1、
       # push 失敗 (tag 衝突) なら次番号で最大 3 回リトライ。GITHUB_TOKEN で
