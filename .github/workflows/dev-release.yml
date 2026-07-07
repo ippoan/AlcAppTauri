@@ -1,0 +1,27 @@
+name: Dev Release
+
+# main に push があるたび dev-N tag を自動採番して push する caller。
+# tag が push されると ci.yml (on push:tags:['dev-*']) が発火し、
+# NSIS build → GitHub Release (prerelease) に upload される。
+#
+# paths filter で docs/workflow のみの変更は skip。
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src-tauri/**'
+      - 'crates/**'
+      - 'dist/**'
+      - 'Cargo.toml'
+
+permissions:
+  contents: write
+
+jobs:
+  dev-release:
+    uses: ippoan/ci-workflows/.github/workflows/dev-tag-release.yml@main
+    secrets:
+      # tag push 後の release chain (ci.yml on push:tags) 発火に必要。
+      # GITHUB_TOKEN で push された tag は他 workflow を trigger しないため PAT push が必須。
+      TAG_RELEASE_PAT: ${{ secrets.TAG_RELEASE_PAT }}

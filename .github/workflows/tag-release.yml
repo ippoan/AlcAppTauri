@@ -1,0 +1,31 @@
+name: Tag Release
+
+# workflow_dispatch で v{semver} tag を採番 + push する caller。
+# tag が push されると ci.yml (on push:tags:['v*']) が発火し、
+# NSIS build → GitHub Release (stable) に upload される。
+#
+# 呼び出し: Actions タブから "Tag Release" を選択 → bump 種別 (patch/minor/major)
+# を選んで Run workflow。
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: 'semver bump (patch / minor / major)'
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+        default: patch
+
+permissions:
+  contents: write
+
+jobs:
+  tag-release:
+    uses: ippoan/ci-workflows/.github/workflows/tag-release.yml@main
+    with:
+      bump: ${{ inputs.bump }}
+    secrets:
+      TAG_RELEASE_PAT: ${{ secrets.TAG_RELEASE_PAT }}
