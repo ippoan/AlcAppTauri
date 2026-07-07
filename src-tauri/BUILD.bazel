@@ -1,0 +1,39 @@
+# Bazel probe (Refs #1): Tauri を Bazel (rules_rust) でビルドできるかを PR CI で実測する
+# ための最小 BUILD。CCoW コンテナからは egress policy で Bazel の外部依存
+# (GitHub Releases) が取れず検証不能なため、egress 制約の無い GitHub Actions
+# ランナー上で bazel-probe.yml が下記 2 target を回して白黒つける。
+
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+# Probe A: 純粋ロジック (config.rs) のみ。tauri 非依存 = serde だけに依存。
+# 素の rules_rust で unit test が回るはず、という仮説の検証。
+rust_library(
+    name = "config_lib",
+    srcs = ["src/config.rs"],
+    edition = "2021",
+    deps = ["@crates//:serde"],
+)
+
+rust_test(
+    name = "config_test",
+    crate = ":config_lib",
+    edition = "2021",
+)
+
+# Probe B: crate 本体 (lib.rs)。tauri::generate_context! マクロは tauri-build
+# (build.rs) が生成する成果物を要求する。build script を cargo_build_script で
+# 配線していない素の rust_library で通るか = 「Tauri 本体は素の rules_rust では
+# ビルドできない」という当初の推論を実測で検証する。
+rust_library(
+    name = "alc_app_tauri_lib",
+    srcs = [
+        "src/config.rs",
+        "src/lib.rs",
+    ],
+    edition = "2021",
+    deps = [
+        "@crates//:serde",
+        "@crates//:serde_json",
+        "@crates//:tauri",
+    ],
+)
