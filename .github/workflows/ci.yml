@@ -7,11 +7,14 @@ on:
     branches: [main]
 
 permissions:
-  contents: read
+  contents: write
+  pull-requests: write
 
 jobs:
   build:
     runs-on: windows-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
 
@@ -51,3 +54,12 @@ jobs:
           name: alcapp-nsis
           path: src-tauri/target/release/bundle/nsis/*.exe
           if-no-files-found: warn
+
+  # CI (build) が green になったら squash merge を queue する。
+  # deploy 系 job が無いので needs は build のみ。build 完走を待ってから
+  # queue するため CI green 前 merge は起きない (ci-workflows auto-merge.yml)。
+  auto-merge:
+    needs: [build]
+    if: github.event_name == 'pull_request'
+    uses: ippoan/ci-workflows/.github/workflows/auto-merge.yml@main
+    secrets: inherit
