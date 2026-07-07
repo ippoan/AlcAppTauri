@@ -68,6 +68,11 @@ jobs:
         continue-on-error: true
         run: bazel build //src-tauri:alc_app_tauri_lib_wired --verbose_failures
 
+      - name: "Probe D: crate 本体 (cargo_build_script で build.rs 配線) を bazel build"
+        id: probe_d
+        continue-on-error: true
+        run: bazel build //src-tauri:alc_app_tauri_lib_full --verbose_failures
+
       - name: 結果サマリ
         if: always()
         run: |
@@ -79,4 +84,5 @@ jobs:
             echo "| A | config crate (tauri 非依存) を bazel test | ${{ steps.probe_a.outcome }} |"
             echo "| B | crate 本体 (未配線) を bazel build | ${{ steps.probe_b.outcome }} |"
             echo "| C | crate 本体 (config/dist/icons/capabilities 配線) を bazel build | ${{ steps.probe_c.outcome }} |"
+            echo "| D | crate 本体 (cargo_build_script で build.rs 配線) を bazel build | ${{ steps.probe_d.outcome }} |"
           } >> "$GITHUB_STEP_SUMMARY"

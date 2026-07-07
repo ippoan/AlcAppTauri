@@ -3,6 +3,7 @@
 # CCoW からは egress policy で Bazel の外部依存が取れず検証不能なため、egress
 # 制約の無い GitHub Actions ランナー上で bazel-probe.yml が下記 target を回す。
 
+load("@rules_rust//cargo:defs.bzl", "cargo_build_script")
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
 # Probe A: 純粋ロジック (config.rs) のみ。tauri 非依存 = serde だけに依存。
@@ -38,12 +39,10 @@ rust_library(
 )
 
 # Probe C: tauri.conf.json / dist / icons / capabilities を compile_data で
-# 配線した版。generate_context! (tauri-codegen) は CARGO_MANIFEST_DIR 基準で
-# tauri.conf.json を読み、frontendDist "../dist" / bundle.icon / capabilities を
-# 解決する。それらを sandbox に供給すれば通るはず、という「配線すれば通る」の実証。
-# - tauri.conf.json: この package (//src-tauri) 直下 → CARGO_MANIFEST_DIR/tauri.conf.json
-# - //:dist_files: root package の dist/ → ../dist を execroot 内で解決
-# - icons/** , capabilities/**: この package 配下 → conf の相対参照を解決
+# 配線した版。tauri.conf.json (Probe B の欠落) は解決できたが、次のハードルとして
+# generate_context! が build.rs (tauri-build) の生成物を OUT_DIR から読むため
+# build script 未配線 = "OUT_DIR env var is not set" で failure した (前回実測)。
+# 「compile_data だけでは足りず build.rs の配線が要る」の実証として残す。
 rust_library(
     name = "alc_app_tauri_lib_wired",
     srcs = [
@@ -59,6 +58,50 @@ rust_library(
         "capabilities/**",
     ]),
     deps = [
+        "@crates//:serde",
+        "@crates//:serde_json",
+        "@crates//:tauri",
+    ],
+)
+
+# Probe D: cargo_build_script で build.rs (tauri-build) を配線した版。
+# Probe C の failure 真因は generate_context! が build.rs の生成物を OUT_DIR から
+# 読むが build script が動いていなかったこと (OUT_DIR env var is not set)。
+# tauri_build::build() は CARGO_MANIFEST_DIR 基準で tauri.conf.json / capabilities /
+# icons を読むので、それらを cargo_build_script の data と rust_library の
+# compile_data 両方に配線する。build_script を rust_library の deps に入れると
+# OUT_DIR が rustc に注入される。これで通れば「build.rs を配線すれば Tauri lib は
+# Bazel でビルドできる」の実証完了。
+cargo_build_script(
+    name = "build_script",
+    srcs = ["build.rs"],
+    edition = "2021",
+    data = [
+        "tauri.conf.json",
+        "//:dist_files",
+    ] + glob([
+        "icons/**",
+        "capabilities/**",
+    ]),
+    deps = ["@crates//:tauri-build"],
+)
+
+rust_library(
+    name = "alc_app_tauri_lib_full",
+    srcs = [
+        "src/config.rs",
+        "src/lib.rs",
+    ],
+    edition = "2021",
+    compile_data = [
+        "tauri.conf.json",
+        "//:dist_files",
+    ] + glob([
+        "icons/**",
+        "capabilities/**",
+    ]),
+    deps = [
+        ":build_script",
         "@crates//:serde",
         "@crates//:serde_json",
         "@crates//:tauri",
