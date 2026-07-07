@@ -3,9 +3,10 @@ name: CI
 on:
   push:
     branches: [main]
+    # dev release は main push CI 内 (release-dev job) で完結するため、
+    # dev-* tag trigger は削除。v* tag は tag-release.yml (workflow_dispatch) 由来。
     tags:
       - 'v*'
-      - 'dev-*'
   pull_request:
     branches: [main]
     # ready_for_review を明示追加。default types (opened/synchronize/reopened) には
@@ -22,11 +23,10 @@ jobs:
   build:
     runs-on: windows-latest
     permissions:
-      contents: read # PR run (untrusted) では最小権限。GitHub Release upload は release job で分離。
+      contents: read # PR run (untrusted) では最小権限。Release upload は分離 job で行う。
     env:
       SCCACHE_GHA_ENABLED: "true"
       RUSTC_WRAPPER: "sccache"
-      # sccache は incremental compile と非互換 (有効だと bypass 警告)。
       CARGO_INCREMENTAL: "0"
     steps:
       - uses: actions/checkout@v4
@@ -42,7 +42,7 @@ jobs:
       - name: Cache cargo build
         uses: Swatinem/rust-cache@v2
         with:
-          # Cargo workspace は repo root (target/ も root 直下)。
+          # Cargo workspace は repo root。target/ も root 直下。
           workspaces: ". -> target"
 
       - name: Setup Node
@@ -59,21 +59,22 @@ jobs:
       - name: Build Tauri bundle (NSIS)
         run: npm run build
 
+      # workspace 化以降 target/ は repo root。旧 src-tauri/target/... path で
+      # 探して "warn" していた bug の再発防止として "error" 化 (無音失敗禁止)。
       - name: Upload installer (artifact)
         uses: actions/upload-artifact@v4
         with:
           name: alcapp-nsis
-          path: src-tauri/target/release/bundle/nsis/*.exe
-          if-no-files-found: warn
+          path: target/release/bundle/nsis/*.exe
+          if-no-files-found: error
 
       - name: sccache stats
         if: always()
         run: sccache --show-stats
 
   # Linux Bazel: rust-only lint/test を target 単位で並列実行。
-  # rust_clippy_aspect + 独立 rust_test target が disk-cache を共有し、
-  # 2 回目以降は差分のみチェック。過去の Tauri × Bazel probe 知見は git 履歴参照
-  # (Probe A/B/C/D: tauri 本体は build.rs 配線 + cargo:dev instruction で頓挫、
+  # 過去の Tauri × Bazel probe 知見は git 履歴参照 (Probe A/B/C/D は
+  # tauri.conf.json + build.rs + cargo:dev instruction で頓挫、
   # Tauri issue #12367 で非 cargo build system は未サポート)。
   bazel-parallel-test:
     runs-on: ubuntu-latest
@@ -128,13 +129,81 @@ jobs:
     uses: ippoan/ci-workflows/.github/workflows/auto-merge.yml@main
     secrets: inherit
 
-  # tag push (v* / dev-*) 時のみ GitHub Release へ upload する分離 job。
-  # PR run では走らないので build job を contents:read に保てる (untrusted PR
-  # code に write 権限を渡さない)。dev-* (dash 含む) は prerelease に、v* は
-  # stable release に振る。artifact は build job が upload したものを DL。
-  release:
+  # main push 完了後、そのまま dev-N tag を採番して prerelease Release を作る。
+  # 旧構成 (dev-release.yml → dev-tag-release.yml → dev-* tag push → CI on tag →
+  # release) では Windows build が 2 回走ってしまう無駄があった。この構成では
+  # 同一 run 内で build → tag 採番 → Release upload まで完結する (build 1 回)。
+  release-dev:
+    needs: [build, bazel-parallel-test]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # dev-N tag を race-safe に採番。既存 dev-* の最大 N を取り +1、
+      # push 失敗 (tag 衝突) なら次番号で最大 3 回リトライ。GITHUB_TOKEN で
+      # push した tag は他 workflow を trigger しない (chain trigger 不要のため OK)。
+      - name: Compute + push next dev-N tag (race-safe)
+        id: dev_tag
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          for attempt in 1 2 3; do
+            git fetch --tags --force
+            LAST=$(git tag -l 'dev-*' | grep -oE 'dev-[0-9]+$' | sed 's/dev-//' | sort -n | tail -1 || true)
+            NEXT=$(( ${LAST:-0} + 1 ))
+            TAG="dev-$NEXT"
+            echo "attempt $attempt: trying $TAG"
+            if git tag "$TAG" && git push origin "$TAG"; then
+              echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+              echo "created: $TAG"
+              exit 0
+            fi
+            git tag -d "$TAG" 2>/dev/null || true
+            sleep 2
+          done
+          echo "failed to create dev tag after 3 attempts"
+          exit 1
+
+      - name: Download NSIS artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: alcapp-nsis
+          path: nsis
+
+      # tauri build は tauri.conf.json の version (固定 "0.1.0") から生成するため
+      # 実ファイル名が `AlcApp_0.1.0_x64-setup.exe` に固定される。tag 名を含めた
+      # 名前に rename して GitHub Release の asset として区別可能にする。
+      - name: Rename NSIS with dev tag
+        env:
+          TAG: ${{ steps.dev_tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          cd nsis
+          for f in *.exe; do
+            new="${f/_0.1.0_/_${TAG}_}"
+            mv "$f" "$new"
+            echo "renamed: $f -> $new"
+          done
+
+      - name: Create prerelease with NSIS
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.dev_tag.outputs.tag }}
+          prerelease: true
+          generate_release_notes: true
+          files: nsis/*.exe
+
+  # v* tag push (tag-release.yml workflow_dispatch 由来) 時の stable release upload。
+  # tag は既に push 済み、build 済みなので同一 run の artifact を DL + rename + upload。
+  release-stable:
     needs: [build]
-    if: startsWith(github.ref, 'refs/tags/')
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -145,9 +214,20 @@ jobs:
           name: alcapp-nsis
           path: nsis
 
-      - name: Upload NSIS to GitHub Release
+      - name: Rename NSIS with v tag
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          cd nsis
+          for f in *.exe; do
+            new="${f/_0.1.0_/_${TAG}_}"
+            mv "$f" "$new"
+            echo "renamed: $f -> $new"
+          done
+
+      - name: Create stable release with NSIS
         uses: softprops/action-gh-release@v2
         with:
           files: nsis/*.exe
-          prerelease: ${{ contains(github.ref_name, '-') }}
           generate_release_notes: true
