@@ -8,6 +8,10 @@ on:
       - 'dev-*'
   pull_request:
     branches: [main]
+    # ready_for_review を明示追加。default types (opened/synchronize/reopened) には
+    # 含まれず、draft → ready 切替後に CI が再走せず auto-merge が skipped まま
+    # 残る事故の再発防止 (PR #3 で実例)。
+    types: [opened, synchronize, reopened, ready_for_review]
 
 permissions:
   contents: write
