@@ -15,6 +15,15 @@ jobs:
     runs-on: windows-latest
     permissions:
       contents: read
+    env:
+      # sccache: コンパイル成果物を GitHub Actions cache に載せ PR 跨ぎで共有する
+      # (rust-alc-api の cache-warm job と同構成)。target/ 丸ごとの rust-cache と
+      # 併用し、cache miss 時のコンパイルも sccache で高速化する。
+      SCCACHE_GHA_ENABLED: "true"
+      RUSTC_WRAPPER: "sccache"
+      # sccache は incremental compile と非互換 (有効だと cache を bypass して警告)。
+      # CI では incremental を切る。
+      CARGO_INCREMENTAL: "0"
     steps:
       - uses: actions/checkout@v4
 
@@ -22,6 +31,9 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
+
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.9
 
       - name: Cache cargo build
         uses: Swatinem/rust-cache@v2
@@ -54,6 +66,10 @@ jobs:
           name: alcapp-nsis
           path: src-tauri/target/release/bundle/nsis/*.exe
           if-no-files-found: warn
+
+      - name: sccache stats
+        if: always()
+        run: sccache --show-stats
 
   # CI (build) が green になったら squash merge を queue する。
   # deploy 系 job が無いので needs は build のみ。build 完走を待ってから
