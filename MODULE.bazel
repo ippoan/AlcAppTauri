@@ -10,10 +10,11 @@ crate = use_extension(
     "crate",
 )
 
+# workspace root は repo root。Cargo.toml / Cargo.lock は src-tauri 配下。
 crate.from_cargo(
     name = "crates",
-    cargo_lockfile = "//:Cargo.lock",
-    manifests = ["//:Cargo.toml"],
+    cargo_lockfile = "//src-tauri:Cargo.lock",
+    manifests = ["//src-tauri:Cargo.toml"],
 )
 
 use_repo(crate, "crates")

@@ -1,12 +1,12 @@
-# Bazel probe (Refs #1): Tauri を Bazel (rules_rust) でビルドできるかを PR CI で実測する
-# ための最小 BUILD。CCoW コンテナからは egress policy で Bazel の外部依存
-# (GitHub Releases) が取れず検証不能なため、egress 制約の無い GitHub Actions
-# ランナー上で bazel-probe.yml が下記 2 target を回して白黒つける。
+# Bazel probe (Refs #1): Tauri を Bazel (rules_rust) でビルドできるかを PR CI で
+# 実測するための BUILD。workspace root は repo root、この package は //src-tauri。
+# CCoW からは egress policy で Bazel の外部依存が取れず検証不能なため、egress
+# 制約の無い GitHub Actions ランナー上で bazel-probe.yml が下記 target を回す。
 
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
 # Probe A: 純粋ロジック (config.rs) のみ。tauri 非依存 = serde だけに依存。
-# 素の rules_rust で unit test が回るはず、という仮説の検証。
+# 素の rules_rust で unit test が回るかの検証 (前回 success)。
 rust_library(
     name = "config_lib",
     srcs = ["src/config.rs"],
@@ -20,10 +20,9 @@ rust_test(
     edition = "2021",
 )
 
-# Probe B: crate 本体 (lib.rs)。tauri::generate_context! マクロは tauri-build
-# (build.rs) が生成する成果物を要求する。build script を cargo_build_script で
-# 配線していない素の rust_library で通るか = 「Tauri 本体は素の rules_rust では
-# ビルドできない」という当初の推論を実測で検証する。
+# Probe B (baseline): crate 本体を配線なしで build。generate_context! が
+# tauri.conf.json を見つけられず失敗する (前回 failure = entity not found)。
+# 「素の rust_library では通らない」を示す対照群として残す。
 rust_library(
     name = "alc_app_tauri_lib",
     srcs = [
@@ -31,6 +30,34 @@ rust_library(
         "src/lib.rs",
     ],
     edition = "2021",
+    deps = [
+        "@crates//:serde",
+        "@crates//:serde_json",
+        "@crates//:tauri",
+    ],
+)
+
+# Probe C: tauri.conf.json / dist / icons / capabilities を compile_data で
+# 配線した版。generate_context! (tauri-codegen) は CARGO_MANIFEST_DIR 基準で
+# tauri.conf.json を読み、frontendDist "../dist" / bundle.icon / capabilities を
+# 解決する。それらを sandbox に供給すれば通るはず、という「配線すれば通る」の実証。
+# - tauri.conf.json: この package (//src-tauri) 直下 → CARGO_MANIFEST_DIR/tauri.conf.json
+# - //:dist_files: root package の dist/ → ../dist を execroot 内で解決
+# - icons/** , capabilities/**: この package 配下 → conf の相対参照を解決
+rust_library(
+    name = "alc_app_tauri_lib_wired",
+    srcs = [
+        "src/config.rs",
+        "src/lib.rs",
+    ],
+    edition = "2021",
+    compile_data = [
+        "tauri.conf.json",
+        "//:dist_files",
+    ] + glob([
+        "icons/**",
+        "capabilities/**",
+    ]),
     deps = [
         "@crates//:serde",
         "@crates//:serde_json",

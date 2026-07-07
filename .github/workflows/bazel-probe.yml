@@ -3,13 +3,18 @@ name: Bazel Probe
 # Tauri を Bazel (rules_rust) でビルドできるかの実測 (Refs #1)。
 # CCoW コンテナからは egress policy で Bazel の外部依存 (GitHub Releases) が
 # 取得できず検証不能なため、egress 制約の無い GitHub Actions ランナー上で
-# 2 つの probe を回して白黒つける。build gate ではない (continue-on-error)。
+# probe を回して白黒つける。build gate ではない (continue-on-error)。
+# workspace root は repo root、bazel は repo root から叩く。
 
 on:
   pull_request:
     branches: [main]
     paths:
       - 'src-tauri/**'
+      - 'dist/**'
+      - 'MODULE.bazel'
+      - 'BUILD.bazel'
+      - '.bazelversion'
       - '.github/workflows/bazel-probe.yml'
 
 permissions:
@@ -19,9 +24,6 @@ jobs:
   bazel-probe:
     name: Bazel probe (Tauri x rules_rust 実測)
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: src-tauri
     env:
       # crate_universe に Cargo.lock からの再 pin を常に許可する。
       CARGO_BAZEL_REPIN: "1"
@@ -38,17 +40,23 @@ jobs:
             libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev libsoup-3.0-dev
 
       - name: Generate Cargo.lock (crate_universe input)
+        working-directory: src-tauri
         run: cargo generate-lockfile
 
       - name: "Probe A: config crate (tauri 非依存) を bazel test"
         id: probe_a
         continue-on-error: true
-        run: bazel test //:config_test --test_output=all
+        run: bazel test //src-tauri:config_test --test_output=all
 
-      - name: "Probe B: crate 本体 (tauri generate_context!) を bazel build"
+      - name: "Probe B: crate 本体 (未配線) を bazel build"
         id: probe_b
         continue-on-error: true
-        run: bazel build //:alc_app_tauri_lib
+        run: bazel build //src-tauri:alc_app_tauri_lib
+
+      - name: "Probe C: crate 本体 (config/dist/icons/capabilities 配線) を bazel build"
+        id: probe_c
+        continue-on-error: true
+        run: bazel build //src-tauri:alc_app_tauri_lib_wired --verbose_failures
 
       - name: 結果サマリ
         if: always()
@@ -59,5 +67,6 @@ jobs:
             echo "| Probe | 対象 | 結果 |"
             echo "|---|---|---|"
             echo "| A | config crate (tauri 非依存) を bazel test | ${{ steps.probe_a.outcome }} |"
-            echo "| B | crate 本体 (tauri generate_context!) を bazel build | ${{ steps.probe_b.outcome }} |"
+            echo "| B | crate 本体 (未配線) を bazel build | ${{ steps.probe_b.outcome }} |"
+            echo "| C | crate 本体 (config/dist/icons/capabilities 配線) を bazel build | ${{ steps.probe_c.outcome }} |"
           } >> "$GITHUB_STEP_SUMMARY"
