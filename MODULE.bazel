@@ -3,7 +3,14 @@ module(
     version = "0.1.0",
 )
 
-bazel_dep(name = "rules_rust", version = "0.69.0")
+# Probe E (Refs #1): rules_rust を 0.69.0 → 0.72.0 に upgrade。
+# Probe D で tauri-build v2.6.3 が build.rs 実行中に "missing `cargo:dev`
+# instruction, please update tauri to latest" で panic した。この instruction は
+# tauri (or tauri-utils) の build.rs が emit する cargo:* metadata で、下流の
+# tauri-build に DEP_TAURI_DEV 等の env var で伝わる仕組み。rules_rust の
+# 新しめの cargo_build_script runner なら metadata forwarding がより完全に
+# なっている可能性があり、それで Probe D の panic が消えるかを実測する。
+bazel_dep(name = "rules_rust", version = "0.72.0")
 
 crate = use_extension(
     "@rules_rust//crate_universe:extensions.bzl",
