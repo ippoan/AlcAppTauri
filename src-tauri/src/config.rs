@@ -2,6 +2,7 @@ use serde::Serialize;
 
 pub const DEFAULT_APP_URL: &str = "https://alc.ippoan.org";
 pub const DEFAULT_RETRY_INTERVAL_MS: u64 = 5000;
+pub const MIN_RETRY_INTERVAL_MS: u64 = 1000;
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct AppConfig {
@@ -19,7 +20,10 @@ pub fn resolve_url_from(raw: Option<&str>) -> String {
 
 pub fn resolve_retry_from(raw: Option<&str>) -> u64 {
     match raw.map(str::trim) {
-        Some(s) if !s.is_empty() => s.parse::<u64>().unwrap_or(DEFAULT_RETRY_INTERVAL_MS),
+        Some(s) if !s.is_empty() => s
+            .parse::<u64>()
+            .unwrap_or(DEFAULT_RETRY_INTERVAL_MS)
+            .max(MIN_RETRY_INTERVAL_MS),
         _ => DEFAULT_RETRY_INTERVAL_MS,
     }
 }
@@ -66,5 +70,10 @@ mod tests {
     #[test]
     fn retry_parses_valid() {
         assert_eq!(resolve_retry_from(Some("2500")), 2500);
+    }
+    #[test]
+    fn retry_clamps_below_minimum() {
+        assert_eq!(resolve_retry_from(Some("0")), MIN_RETRY_INTERVAL_MS);
+        assert_eq!(resolve_retry_from(Some("1")), MIN_RETRY_INTERVAL_MS);
     }
 }

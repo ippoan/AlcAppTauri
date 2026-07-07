@@ -224,6 +224,9 @@ const DEFAULT_CONFIG = {
 /* ===== 前回のリトライタイマーを管理（二重起動を防ぐ） ===== */
 let retryTimer = null;
 
+/* ===== 実行中の tryLoad() 世代カウンタ（古い reachable() 結果の反映を防ぐ） ===== */
+let loadGeneration = 0;
+
 /* ===== フォールバック設定フラグ（バッジ表示用） ===== */
 let usingFallback = false;
 
@@ -265,35 +268,22 @@ async function loadConfig() {
 }
 
 /**
- * URL が到達可能かどうかを Image ping で確認する（CORS を回避）。
- * favicon.ico にランダムなタイムスタンプを付けてキャッシュを無効化する。
- * タイムアウト: 4000ms。
+ * URL が到達可能かどうかを no-cors fetch で確認する。
+ * opaque response でも「ネットワーク到達」自体は分かる (ステータスは見ない)。
+ * favicon 等の特定リソースの存在に依存しない。タイムアウト: 4000ms。
  */
 function reachable(url) {
-  return new Promise((resolve) => {
-    let settled = false;
-    let timeoutId = null;
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 4000);
 
-    function finish(result) {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timeoutId);
-      /* img への参照を解放してブラウザのリクエストを停止 */
-      img.onload = null;
-      img.onerror = null;
-      img.src = "";
-      resolve(result);
-    }
-
-    /* 4秒でタイムアウト → 到達不可とみなす */
-    timeoutId = setTimeout(() => finish(false), 4000);
-
-    const img = new Image();
-    img.onload  = () => finish(true);
-    img.onerror = () => finish(false);
-    /* favicon.ico にタイムスタンプを付加してキャッシュを回避 */
-    img.src = url.replace(/\/$/, "") + "/favicon.ico?ts=" + Date.now();
-  });
+  return fetch(url, {
+    mode: "no-cors",
+    cache: "no-store",
+    signal: controller.signal,
+  })
+    .then(() => true)
+    .catch(() => false)
+    .finally(() => clearTimeout(timeoutId));
 }
 
 /* ===== DOM 要素のキャッシュ ===== */
@@ -330,9 +320,15 @@ async function tryLoad() {
     retryTimer = null;
   }
 
+  /* この呼び出しの世代を記録し、古い呼び出しの結果は捨てる */
+  const generation = ++loadGeneration;
+
   showLoading();
 
   const ok = await reachable(cfg.url);
+
+  /* 待っている間に別の tryLoad() が始まっていたら、この結果は無視する */
+  if (generation !== loadGeneration) return;
 
   if (ok) {
     /* サーバーに到達できた → WebView を遷移させる */
