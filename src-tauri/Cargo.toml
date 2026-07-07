@@ -16,7 +16,14 @@ path = "src/main.rs"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["tray-icon"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 alc-config = { path = "../crates/alc-config" }
+# dev WebSocket ログサーバー (127.0.0.1 のみ)。tray 常駐と実機 (WebView2) の
+# 挙動を外から見るための開発支援。詳細は src/logws.rs 参照。
+tokio = { version = "1", features = ["rt-multi-thread", "net", "sync", "macros"] }
+tokio-tungstenite = "0.24"
+futures-util = "0.3"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
