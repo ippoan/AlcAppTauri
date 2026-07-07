@@ -1,0 +1,39 @@
+# crates/alc-config — 純粋 Rust ロジック (env → AppConfig)。tauri 非依存なので
+# rules_rust の素の rust_library / rust_test で完結する。
+#
+# 並列 test の実演 (Refs #1): unit test + 2 integration test の 3 target を
+# 独立 rust_test として宣言し、`bazel test //crates/alc-config:...` で並列実行。
+# bazel は .bazelrc の --jobs=auto (デフォルト) で並列度を自動決定する。
+
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+rust_library(
+    name = "alc_config",
+    srcs = ["src/lib.rs"],
+    edition = "2021",
+    visibility = ["//visibility:public"],
+    deps = ["@crates//:serde"],
+)
+
+# unit test (crate = 内部 mod tests)。
+rust_test(
+    name = "alc_config_unit_test",
+    crate = ":alc_config",
+    edition = "2021",
+)
+
+# integration test 1: URL 解決の edge case。srcs / deps 指定で独立 test binary に。
+rust_test(
+    name = "url_scenarios_test",
+    srcs = ["tests/url_scenarios.rs"],
+    edition = "2021",
+    deps = [":alc_config"],
+)
+
+# integration test 2: retry interval の edge case。上と独立 target なので並列実行対象。
+rust_test(
+    name = "retry_scenarios_test",
+    srcs = ["tests/retry_scenarios.rs"],
+    edition = "2021",
+    deps = [":alc_config"],
+)

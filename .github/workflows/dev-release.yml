@@ -1,0 +1,36 @@
+name: Dev Release
+
+# main に push があるたび dev-N tag を自動採番して push する caller
+# (cdp-relay/rust-dev-tag.yml と同 pattern)。tag が push されると
+# ci.yml (on push:tags:['dev-*']) が発火し NSIS build → GitHub Release
+# (prerelease) に upload される。
+#
+# paths に **release pipeline を構成する workflow yml 自体も含める** — こうすると
+# 「dev-release.yml や ci.yml だけを直した PR」の merge でも dev release が発火し、
+# pipeline 自体を実測検証できる (cdp-relay#12 / rust-dev-tag.yml の gotcha 参照)。
+#
+# 連鎖発火には TAG_RELEASE_PAT が必須 (GITHUB_TOKEN で push した tag は他 workflow
+# を起こさない)。未設定だと tag は打たれるが ci.yml release job が発火しない。
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src-tauri/**'
+      - 'crates/**'
+      - 'dist/**'
+      - 'Cargo.toml'
+      - 'package.json'
+      - '.github/workflows/dev-release.yml'
+      - '.github/workflows/ci.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  dev-release:
+    uses: ippoan/ci-workflows/.github/workflows/dev-tag-release.yml@main
+    secrets:
+      # tag push 後の release chain (ci.yml on push:tags) 発火に必要。
+      # GITHUB_TOKEN で push された tag は他 workflow を trigger しないため PAT push が必須。
+      TAG_RELEASE_PAT: ${{ secrets.TAG_RELEASE_PAT }}

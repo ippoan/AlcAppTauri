@@ -3,26 +3,30 @@ name: CI
 on:
   push:
     branches: [main]
+    tags:
+      - 'v*'
+      - 'dev-*'
   pull_request:
     branches: [main]
+    # ready_for_review を明示追加。default types (opened/synchronize/reopened) には
+    # 含まれず、draft → ready 切替後に CI が再走せず auto-merge が skipped まま
+    # 残る事故の再発防止 (PR #3 で実例)。
+    types: [opened, synchronize, reopened, ready_for_review]
 
 permissions:
   contents: write
   pull-requests: write
 
 jobs:
+  # Windows: fmt + tauri build (NSIS)。clippy/test は Bazel Linux job に委譲。
   build:
     runs-on: windows-latest
     permissions:
-      contents: read
+      contents: read # PR run (untrusted) では最小権限。GitHub Release upload は release job で分離。
     env:
-      # sccache: コンパイル成果物を GitHub Actions cache に載せ PR 跨ぎで共有する
-      # (rust-alc-api の cache-warm job と同構成)。target/ 丸ごとの rust-cache と
-      # 併用し、cache miss 時のコンパイルも sccache で高速化する。
       SCCACHE_GHA_ENABLED: "true"
       RUSTC_WRAPPER: "sccache"
-      # sccache は incremental compile と非互換 (有効だと cache を bypass して警告)。
-      # CI では incremental を切る。
+      # sccache は incremental compile と非互換 (有効だと bypass 警告)。
       CARGO_INCREMENTAL: "0"
     steps:
       - uses: actions/checkout@v4
@@ -30,7 +34,7 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
-          components: clippy, rustfmt
+          components: rustfmt
 
       - name: Setup sccache
         uses: mozilla-actions/sccache-action@v0.0.9
@@ -38,7 +42,8 @@ jobs:
       - name: Cache cargo build
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: "src-tauri -> target"
+          # Cargo workspace は repo root (target/ も root 直下)。
+          workspaces: ". -> target"
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -49,18 +54,12 @@ jobs:
         run: npm install
 
       - name: Format check
-        run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
-
-      - name: Clippy
-        run: cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings
-
-      - name: Test
-        run: cargo test --manifest-path src-tauri/Cargo.toml
+        run: cargo fmt --check
 
       - name: Build Tauri bundle (NSIS)
         run: npm run build
 
-      - name: Upload installer
+      - name: Upload installer (artifact)
         uses: actions/upload-artifact@v4
         with:
           name: alcapp-nsis
@@ -71,11 +70,84 @@ jobs:
         if: always()
         run: sccache --show-stats
 
-  # CI (build) が green になったら squash merge を queue する。
-  # deploy 系 job が無いので needs は build のみ。build 完走を待ってから
-  # queue するため CI green 前 merge は起きない (ci-workflows auto-merge.yml)。
+  # Linux Bazel: rust-only lint/test を target 単位で並列実行。
+  # rust_clippy_aspect + 独立 rust_test target が disk-cache を共有し、
+  # 2 回目以降は差分のみチェック。過去の Tauri × Bazel probe 知見は git 履歴参照
+  # (Probe A/B/C/D: tauri 本体は build.rs 配線 + cargo:dev instruction で頓挫、
+  # Tauri issue #12367 で非 cargo build system は未サポート)。
+  bazel-parallel-test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      CARGO_BAZEL_REPIN: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: ippoan/setup-bazel@main
+        with:
+          disk-cache: "alcapptauri-bazel-probe"
+          external-cache: true
+          repository-cache: true
+
+      - name: Generate Cargo.lock (crate_universe input)
+        run: cargo generate-lockfile
+
+      - name: "bazel test //crates/alc-config/... (3 target 並列)"
+        id: bazel_test
+        run: |
+          bazel test //crates/alc-config/... \
+            --test_output=errors \
+            --test_summary=short \
+            --verbose_failures
+
+      - name: "bazel build --config=clippy (rust_clippy_aspect で並列適用)"
+        id: bazel_clippy
+        run: |
+          bazel build --config=clippy //crates/alc-config/... \
+            --verbose_failures
+
+      - name: 結果サマリ
+        if: always()
+        run: |
+          {
+            echo "## Bazel 並列 test + clippy (crates/alc-config)"
+            echo ""
+            echo "- bazel test (3 rust_test target 並列): ${{ steps.bazel_test.outcome }}"
+            echo "- bazel build --config=clippy (rust_clippy_aspect): ${{ steps.bazel_clippy.outcome }}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # Windows build と Linux bazel test/clippy の両方が green になったら
+  # squash merge を queue する。片方 fail なら auto-merge は走らない。
   auto-merge:
-    needs: [build]
+    needs: [build, bazel-parallel-test]
     if: github.event_name == 'pull_request'
     uses: ippoan/ci-workflows/.github/workflows/auto-merge.yml@main
     secrets: inherit
+
+  # tag push (v* / dev-*) 時のみ GitHub Release へ upload する分離 job。
+  # PR run では走らないので build job を contents:read に保てる (untrusted PR
+  # code に write 権限を渡さない)。dev-* (dash 含む) は prerelease に、v* は
+  # stable release に振る。artifact は build job が upload したものを DL。
+  release:
+    needs: [build]
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download NSIS artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: alcapp-nsis
+          path: nsis
+
+      - name: Upload NSIS to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: nsis/*.exe
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          generate_release_notes: true

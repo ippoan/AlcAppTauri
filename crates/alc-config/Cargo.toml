@@ -1,0 +1,8 @@
+[package]
+name = "alc-config"
+version = "0.1.0"
+edition = "2021"
+description = "AlcApp — runtime config resolution (URL / retry interval)"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }

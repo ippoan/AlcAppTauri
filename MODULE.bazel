@@ -1,0 +1,25 @@
+module(
+    name = "alc_app_tauri",
+    version = "0.1.0",
+)
+
+bazel_dep(name = "rules_rust", version = "0.69.0")
+
+crate = use_extension(
+    "@rules_rust//crate_universe:extensions.bzl",
+    "crate",
+)
+
+# Cargo workspace は repo root (//Cargo.toml が workspace 宣言、//Cargo.lock が
+# 全 crate 共通の lock)。crate_universe には root と各 member の manifest を渡す。
+crate.from_cargo(
+    name = "crates",
+    cargo_lockfile = "//:Cargo.lock",
+    manifests = [
+        "//:Cargo.toml",
+        "//src-tauri:Cargo.toml",
+        "//crates/alc-config:Cargo.toml",
+    ],
+)
+
+use_repo(crate, "crates")

@@ -1,0 +1,3 @@
+# repo root package。Cargo workspace 化に伴い、実際の Bazel target は
+# 各 crate 配下 (crates/alc-config/BUILD.bazel 等) に置く。root では特別な
+# target を提供しない。
